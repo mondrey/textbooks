@@ -4,8 +4,9 @@
 // =============================================================================
 
 
+import {tabulate, tabulate2D} from '@mathigon/core';
 import {clamp, nearlyEquals} from '@mathigon/fermat';
-import {$N, animate, AnimationResponse, CanvasView, ElementView, EventCallback, loadScript, slide, SVGParentView, SVGView} from '@mathigon/boost';
+import {$N, animate, AnimationResponse, CanvasView, ElementView, EventCallback, loadScript, observe, slide, SVGParentView, SVGView} from '@mathigon/boost';
 import {Angle, Arc, Circle, intersections, Line, Point, Polygon, Polyline, Rectangle, Segment} from '@mathigon/euclid';
 
 import {Geopad, GeoPath, GeoPoint, Path, Polypad, Slider, Step, Tile} from '../shared/types';
@@ -18,33 +19,32 @@ import {ORANGE, TEAL} from '../shared/constants';
 
 // SECTION: introduction / rectangles
 
-type ShapesModel = {
-  firstArea?: {
-    ropeUsed?: number
-    cobblestones?: number
-    points?: Point[]
+const courseModel = observe({
+  firstArea: {
+    ropeUsed: 0,
+    cobblestones: 0,
+    points: [] as Point[]
   }
-}
+});
 
 export function performance1($step: Step) {
-  const courseModel = getCourseModel($step);
   const $geopad = $step.$('x-geopad') as Geopad;
   $geopad.switchTool('move');
   const scale = (600 / 30) * 4; // Pixels per meter
   const blockSize = (1 / 4) * scale;
   const blocks: {poly: Rectangle, path: GeoPath}[] = [];
-  [...Array(30).keys()].forEach(column =>
-    [...Array(20).keys()].forEach(row => {
-      const block = new Rectangle(
-          new Point(column * blockSize, row * blockSize),
-          blockSize,
-          blockSize
-      );
-      const path = $geopad.drawPath(block);
-      path.$el.css({'stroke-width': 2});
-      blocks.push({poly: block, path});
-    })
-  );
+
+  tabulate2D((column, row) => {
+    const block = new Rectangle(
+        new Point(column * blockSize, row * blockSize),
+        blockSize,
+        blockSize
+    );
+    const path = $geopad.drawPath(block);
+    path.$el.css({'stroke-width': 2});
+    blocks.push({poly: block, path});
+  }, 30, 20);
+
   setupRope('performance-1', 20 * scale, $geopad, $step, (line: Polyline, reset: VoidFunction) => {
     const areaBlocks = blocks.filter(block => block.poly.points.every(point => line.contains(point)));
     areaBlocks.forEach(block => block.path.$el.css({fill: 'lime'}));
@@ -59,11 +59,6 @@ export function performance1($step: Step) {
       $step.addHint('correct');
     } else reset();
   });
-}
-
-function getCourseModel($step: Step) {
-  const parentModel = $step.getParentModel();
-  return parentModel.$course.model as ShapesModel;
 }
 
 function setupRope(id: string, maxLength: number, $geopad: Geopad, $step: Step, onComplete: (final: Polyline, reset: VoidFunction) => void) {
@@ -101,7 +96,6 @@ function setupRope(id: string, maxLength: number, $geopad: Geopad, $step: Step, 
 }
 
 export function performance2($step: Step) {
-  const courseModel = getCourseModel($step);
   const $geopad = $step.$('x-geopad') as Geopad;
   const initRope = new RopePoly(...courseModel.firstArea!.points!);
   const ropePath = $geopad.drawPath(initRope.poly);
@@ -249,12 +243,12 @@ type DraggableRectanglesOptions = {
 
 function setupDraggableRectangles($polypad: Polypad, options: DraggableRectanglesOptions) {
   // [TODO]: Make 'infinite' rectangles if count == 0
-  [...Array(options.count)].forEach((_, index) => {
+  tabulate(index => {
     const initLoc = options.initLocations != null ? options.initLocations[index] : new Point(0, 0);
     const r = new Rectangle(new Point(0, 0), options.dimensions.x, options.dimensions.y);
     const tile = $polypad.newTile('polygon', getTangramPolystr(r.points));
     tile.setPosition(initLoc);
-  });
+  }, options.count);
 }
 
 export function stripPlacement($step: Step) {
@@ -894,47 +888,42 @@ function toRect(points: Point[]): HelperPoly | null {
   } else return null;
 }
 
-function toParallelogram(a: Point[], b: Point[]) {
-  const aEdges = a.map((point, index) =>
-    new Segment(point, a[(index + 1) % a.length])
-  );
-  const bEdges = b.map((point, index) =>
-    new Segment(point, b[(index + 1) % b.length])
-  );
-  const contacts = aEdges.filter(aEdge =>
-    bEdges.find(bEdge => bEdge.equals(aEdge)) != undefined
-  );
+function toParallelogram(a: Polygon, b: Polygon) {
+  const bEdges = b.edges;
+  const contacts = a.edges.filter(a => bEdges.some(b => b.equals(a)));
   if (contacts.length != 1) return null;
-  return convexHull([...a, ...b]);
+  return convexHull([...a.points, ...b.points]);
 }
 
 function moveOnLine(p: Point, amount: number, l: Line) {
   return (new Segment(p, p.shift(amount, 0))).rotate(l.angle, p).p2;
 }
 
-function filterMap<CT, RT>(arr: CT[], pred: (elem: CT) => RT | null): RT[] {
+function filterMap<CT, RT>(arr: CT[], pred: (elem: CT) => RT | null) {
   const elems = arr.map(elem => pred(elem));
-  return elems.filter(elem => elem != null).map(elem => elem as RT);
+  return elems.filter(elem => elem != null) as RT[];
 }
 
 export function identifyParallelograms($step: Step) {
   const $svg = $step.$('svg') as SVGParentView;
-  let identified = 0;
-  $svg.$$('path').forEach($path => {
+  for (const [i, $path] of $svg.$$('path').entries()) {
     if ($path.hasClass('parallelogram')) {
-      $path.on('click', () => {
-        if (!$path.hasAttr('clicked')) {
-          $path.setAttr('clicked', true);
-          $path.css({fill: 'lime'});
+      if ($step.scores.has('selected-' + i)) {
+        $path.one('click', () => {
+          $path.addClass('correct');
           $step.addHint('correct');
-          identified++;
-          if (identified == 6) $step.score('selected');
-        }
-      });
+          $step.score('selected-' + i);
+        });
+      } else {
+        $path.addClass('correct');
+      }
     } else {
-      $path.on('click', () => $step.addHint('incorrect'));
+      $path.one('click', () => {
+        $path.addClass('incorrect');
+        $step.addHint('incorrect');
+      });
     }
-  });
+  }
 }
 
 export function apartments($step: Step) {
@@ -1033,8 +1022,8 @@ export function worldTradeCenter($step: Step) {
       );
     }
   };
-  $tri1.$el.on('mouseup', checkDone);
-  $tri2.$el.on('mouseup', checkDone);
+  $tri1.$el.on('pointerup', checkDone);
+  $tri2.$el.on('pointerup', checkDone);
 }
 
 export function congruentTriangles($step: Step) {
@@ -1098,20 +1087,21 @@ export function congruentTriangles($step: Step) {
       $step.addHint('correct');
     }
   };
-  $step.$('button.copies')?.on('click', () => {
-    $tris.forEach($tri => {
+  $step.$('button.copies')?.one('click', () => {
+    for (const $tri of $tris) {
       const $copy = $tri.copy() as Tile;
       $copy.setColour(ORANGE);
       $pairs.push([$tri, $copy]);
-    });
-    $pairs.forEach(([$a, $b]) => {
-      $a.$el.on('mouseup', checkDone);
-      $b.$el.on('mouseup', checkDone);
-    });
+    }
+    for (const [$a, $b] of $pairs) {
+      $a.$el.on('pointerup', checkDone);
+      $b.$el.on('pointerup', checkDone);
+    }
   });
 }
 
 function convexHull(points: Point[]) {
+  // TODO Make move this to euclid.js
   if (points.length <= 3) return new Polygon(...points);
   const sorted = points.sort((a, b) => {
     return a.x != b.x ? a.x - b.x : a.y - b.y;
@@ -1194,11 +1184,7 @@ function setupBaseHeight(
           });
         }
 
-        const pointsEq = (a: Point, b: Point) => {
-          const precision = 0.001;
-          return nearlyEquals(a.x, b.x, precision) && nearlyEquals(a.y, b.y, precision);
-        };
-        const heightPoint = poly.points.filter(point => !pointsEq(point, edge.p1) && !pointsEq(point, edge.p2)).pop()!;
+        const heightPoint = poly.points.filter(point => !point.equals(edge.p1) && !point.equals(edge.p2)).pop()!;
         const height = (new Segment(heightPoint, edge.project(heightPoint))).length;
         const heightLine = edge.parallel(heightPoint);
         const heightSegment = new Segment(heightLine.project(edge.p1), heightLine.project(edge.p2));
@@ -1212,10 +1198,10 @@ function setupBaseHeight(
         $geopad.on('begin:path', ({path, _}: {path: GeoPath, _: any}) => {
           p = path;
           cb = _ => handlePathing(path, edgePath, heightPath, height, () => nearby = true, () => nearby = false);
-          path.$parent.on('mousemove', cb);
+          path.$parent.on('pointermove', cb);
         });
-        $geopad.on('add:path', _ => {
-          $geopad.off('mousemove', cb);
+        $geopad.on('add:path', () => {
+          $geopad.off('pointermove', cb);
           if (nearby) {
             options?.onComplete?.();
             const p1 = (p.value as Segment).p1;
@@ -1253,7 +1239,7 @@ export function area3($step: Step) {
   $tri2.setRotation(35);
   $tri2.setColour('orange');
   const checkDone = () => {
-    const para = toParallelogram($tri1.points, $tri2.points);
+    const para = toParallelogram($tri1.path as Polygon, $tri2.path as Polygon);
     if (para != null) {
       $step.addHint('correct');
       $step.score('arranged');
@@ -1286,11 +1272,8 @@ export function triangleBases($step: Step) {
   const partnerA = new Polygon(pointB, new Point(586.6, 34.1), pointC);
   const partnerB = new Polygon(pointA, pointC, new Point(468.8, 172.5));
   const partnerC = new Polygon(new Point(5.5, 34.1), pointA, pointB);
-  const [$geopadA, $geopadB, $geopadC] = [
-    $step.$('.side-a x-geopad') as Geopad,
-    $step.$('.side-b x-geopad') as Geopad,
-    $step.$('.side-c x-geopad') as Geopad
-  ];
+  const [$geopadA, $geopadB, $geopadC] = $step.$$('x-geopad') as Geopad[];
+
   const onIncorrect = () => $step.addHint('incorrect');
   const [optionsA, optionsB, optionsC] = [
     {
